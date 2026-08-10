@@ -45,6 +45,10 @@ private:
 
     emote_handle_t emote_handle_ = nullptr;
     bool confirm_objects_created_ = false;
+    // While the confirm screen is up, emotion/status/caption updates are
+    // dropped: the turn's closing ui_state arrives right after confirm_request
+    // and would redraw the eyes and toast on top of the prompt.
+    bool confirm_screen_active_ = false;
 
 };
 

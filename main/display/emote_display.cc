@@ -66,6 +66,10 @@ static bool OnFlushIoReady(const esp_lcd_panel_io_handle_t panel_io,
 // flush. Stored pre-byte-swapped because the engine renders with swap=true.
 // White (0xFFFF) is the resting color until the server names the active mode.
 static std::atomic<uint16_t> s_accent_ring_color{0xFFFF};
+// The confirm screen hides the ring: it is painted into every flushed stripe
+// regardless of what the engine rendered, so this flag is the only way a
+// takeover can claim the full circle.
+static std::atomic<bool> s_accent_ring_visible{true};
 static int s_display_width = 0;
 static int s_display_height = 0;
 constexpr float kAccentRingThickness = 8.0f;
@@ -73,6 +77,9 @@ constexpr float kAccentRingThickness = 8.0f;
 static void OverlayAccentRing(int x_start, int y_start, int x_end, int y_end, uint16_t* pixels)
 {
     if (s_display_width == 0 || s_display_height == 0) {
+        return;
+    }
+    if (!s_accent_ring_visible.load(std::memory_order_relaxed)) {
         return;
     }
     const uint16_t color = s_accent_ring_color.load(std::memory_order_relaxed);
@@ -191,6 +198,9 @@ EmoteDisplay::~EmoteDisplay()
 void EmoteDisplay::SetEmotion(const char* const emotion)
 {
     ESP_LOGI(TAG, "SetEmotion: %s", emotion);
+    if (confirm_screen_active_) {
+        return;
+    }
     if (emote_handle_ && emotion && strlen(emotion) > 0) {
         emote_set_anim_emoji(emote_handle_, emotion);
     }
@@ -199,6 +209,9 @@ void EmoteDisplay::SetEmotion(const char* const emotion)
 void EmoteDisplay::SetChatMessage(const char* const role, const char* const content)
 {
     ESP_LOGI(TAG, "SetChatMessage: %s, %s", role, content);
+    if (confirm_screen_active_) {
+        return;
+    }
     if (emote_handle_ && content && strlen(content) > 0) {
         if ((std::strcmp(role, "system") == 0) && std::strstr(content, "xiaozhi.me")) {
             size_t len = strlen(content);
@@ -216,6 +229,9 @@ void EmoteDisplay::SetChatMessage(const char* const role, const char* const cont
 void EmoteDisplay::SetStatus(const char* const status)
 {
     ESP_LOGI(TAG, "SetStatus: %s", status);
+    if (confirm_screen_active_) {
+        return;
+    }
     if (emote_handle_ && status && strlen(status) > 0) {
         if (std::strcmp(status, Lang::Strings::LISTENING) == 0) {
             emote_set_event_msg(emote_handle_, EMOTE_MGR_EVT_LISTEN, NULL);
@@ -358,6 +374,8 @@ void EmoteDisplay::ShowConfirmScreen(const char* summary)
     gfx_label_set_text(summary_label, summary ? summary : "");
     emote_unlock(emote_handle_);
 
+    confirm_screen_active_ = true;
+    s_accent_ring_visible.store(false, std::memory_order_relaxed);
     emote_set_anim_visible(emote_handle_, false);
     emote_set_obj_visible(emote_handle_, EMT_DEF_ELEM_LISTEN_ANIM, false);
     emote_set_obj_visible(emote_handle_, EMT_DEF_ELEM_TOAST_LABEL, false);
@@ -373,6 +391,8 @@ void EmoteDisplay::HideConfirmScreen()
     if (!emote_handle_ || !confirm_objects_created_) {
         return;
     }
+    confirm_screen_active_ = false;
+    s_accent_ring_visible.store(true, std::memory_order_relaxed);
     emote_set_obj_visible(emote_handle_, "confirm_text", false);
     emote_set_obj_visible(emote_handle_, "confirm_yes", false);
     emote_set_obj_visible(emote_handle_, "confirm_no", false);

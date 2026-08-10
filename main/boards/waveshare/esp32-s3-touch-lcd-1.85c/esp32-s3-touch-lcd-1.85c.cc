@@ -523,7 +523,12 @@ private:
                     last_x = x;
                     last_y = y;
                 } else if (was_pressed) {
-                    Application::GetInstance().OnConfirmTouchRelease(last_x, last_y);
+                    // The touch controller reports x mirrored relative to the
+                    // rendered frame (the gesture path never noticed: it only
+                    // uses deltas). Verified on-device: green button on the
+                    // right read back as the left zone.
+                    Application::GetInstance().OnConfirmTouchRelease(
+                        DISPLAY_WIDTH - 1 - last_x, last_y);
                 }
                 was_pressed = is_pressed;
                 vTaskDelay(pdMS_TO_TICKS(kTouchPollMs));
