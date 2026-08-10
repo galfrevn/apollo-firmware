@@ -508,6 +508,28 @@ private:
                 esp_lcd_touch_get_coordinates(touch_handle_, &x, &y, nullptr, &point_count, 1) &&
                 point_count > 0;
 
+            // A live confirm screen owns the touch: the release hit-tests the
+            // two buttons immediately — waiting out the double-tap window would
+            // make them feel broken — and a press can no longer become
+            // push-to-talk. A hold that started before the screen appeared
+            // still finishes through the normal path below.
+            if (Application::GetInstance().IsConfirmActive() && !is_hold_talking) {
+                pending_tap_ms = 0;
+                if (is_pressed && !was_pressed) {
+                    start_x = last_x = x;
+                    start_y = last_y = y;
+                    press_started_ms = now_ms;
+                } else if (is_pressed) {
+                    last_x = x;
+                    last_y = y;
+                } else if (was_pressed) {
+                    Application::GetInstance().OnConfirmTouchRelease(last_x, last_y);
+                }
+                was_pressed = is_pressed;
+                vTaskDelay(pdMS_TO_TICKS(kTouchPollMs));
+                continue;
+            }
+
             if (is_pressed && !was_pressed) {
                 start_x = last_x = x;
                 start_y = last_y = y;

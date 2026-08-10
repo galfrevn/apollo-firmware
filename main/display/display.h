@@ -49,6 +49,10 @@ public:
     // "#RRGGBB" accent for mode indicators (e.g. the edge ring on round
     // displays). Default is a no-op for displays without one.
     virtual void SetAccentColor(const char* color) {}
+    // Full-screen takeover asking to approve or reject an unsafe action.
+    // Default is a no-op for displays that cannot draw touch targets.
+    virtual void ShowConfirmScreen(const char* summary) { (void)summary; }
+    virtual void HideConfirmScreen() {}
     virtual void SetEmojiCollection(std::shared_ptr<EmojiCollection>) {}
     virtual void SetupUI() { setup_ui_called_ = true; }
 

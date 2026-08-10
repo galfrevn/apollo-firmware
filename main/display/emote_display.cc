@@ -28,6 +28,7 @@
 #include "assets/lang_config.h"
 #include "assets.h"
 #include "board.h"
+#include "confirm_geometry.h"
 #include "gfx.h"
 #include "expression_emote.h"
 
@@ -284,6 +285,98 @@ void EmoteDisplay::SetAccentColor(const char* const color)
     // The engine only re-flushes dirty areas and the screen border belongs to
     // none of them, so a color change has to invalidate everything or the ring
     // keeps its old color until the next full redraw.
+    RefreshAll();
+}
+
+bool EmoteDisplay::EnsureConfirmObjects()
+{
+    if (confirm_objects_created_) {
+        return true;
+    }
+    if (!emote_handle_) {
+        return false;
+    }
+
+    gfx_obj_t* summary_label =
+        emote_create_obj_by_type(emote_handle_, EMOTE_OBJ_TYPE_LABEL, "confirm_text");
+    gfx_obj_t* approve_button =
+        emote_create_obj_by_type(emote_handle_, EMOTE_OBJ_TYPE_LABEL, "confirm_yes");
+    gfx_obj_t* reject_button =
+        emote_create_obj_by_type(emote_handle_, EMOTE_OBJ_TYPE_LABEL, "confirm_no");
+    if (!summary_label || !approve_button || !reject_button) {
+        ESP_LOGE(TAG, "Could not create confirm screen objects");
+        return false;
+    }
+
+    emote_lock(emote_handle_);
+    gfx_obj_align(summary_label, GFX_ALIGN_TOP_MID, 0, confirm_geometry::kSummaryOffsetY);
+    gfx_obj_set_size(summary_label, confirm_geometry::kSummaryWidth,
+                     confirm_geometry::kSummaryHeight);
+    gfx_label_set_color(summary_label, GFX_COLOR_HEX(confirm_geometry::kSummaryTextColor));
+
+    gfx_obj_align(approve_button, GFX_ALIGN_TOP_LEFT, confirm_geometry::kApproveButtonOffsetX,
+                  confirm_geometry::kButtonOffsetY);
+    gfx_obj_set_size(approve_button, confirm_geometry::kButtonWidth,
+                     confirm_geometry::kButtonHeight);
+    gfx_label_set_text(approve_button, "Sí");
+    gfx_label_set_color(approve_button, GFX_COLOR_HEX(confirm_geometry::kButtonTextColor));
+    gfx_label_set_bg_color(approve_button,
+                           GFX_COLOR_HEX(confirm_geometry::kApproveBackgroundColor));
+    gfx_label_set_bg_enable(approve_button, true);
+    gfx_label_set_long_mode(approve_button, GFX_LABEL_LONG_CLIP);
+
+    gfx_obj_align(reject_button, GFX_ALIGN_TOP_LEFT, confirm_geometry::kRejectButtonOffsetX,
+                  confirm_geometry::kButtonOffsetY);
+    gfx_obj_set_size(reject_button, confirm_geometry::kButtonWidth,
+                     confirm_geometry::kButtonHeight);
+    gfx_label_set_text(reject_button, "No");
+    gfx_label_set_color(reject_button, GFX_COLOR_HEX(confirm_geometry::kButtonTextColor));
+    gfx_label_set_bg_color(reject_button,
+                           GFX_COLOR_HEX(confirm_geometry::kRejectBackgroundColor));
+    gfx_label_set_bg_enable(reject_button, true);
+    gfx_label_set_long_mode(reject_button, GFX_LABEL_LONG_CLIP);
+
+    // emote_create_obj_by_type leaves custom objects visible.
+    gfx_obj_set_visible(summary_label, false);
+    gfx_obj_set_visible(approve_button, false);
+    gfx_obj_set_visible(reject_button, false);
+    emote_unlock(emote_handle_);
+
+    confirm_objects_created_ = true;
+    return true;
+}
+
+void EmoteDisplay::ShowConfirmScreen(const char* summary)
+{
+    ESP_LOGI(TAG, "ShowConfirmScreen: %s", summary ? summary : "(null)");
+    if (!EnsureConfirmObjects()) {
+        return;
+    }
+
+    gfx_obj_t* summary_label = emote_get_obj_by_name(emote_handle_, "confirm_text");
+    emote_lock(emote_handle_);
+    gfx_label_set_text(summary_label, summary ? summary : "");
+    emote_unlock(emote_handle_);
+
+    emote_set_anim_visible(emote_handle_, false);
+    emote_set_obj_visible(emote_handle_, EMT_DEF_ELEM_LISTEN_ANIM, false);
+    emote_set_obj_visible(emote_handle_, EMT_DEF_ELEM_TOAST_LABEL, false);
+    emote_set_obj_visible(emote_handle_, "confirm_text", true);
+    emote_set_obj_visible(emote_handle_, "confirm_yes", true);
+    emote_set_obj_visible(emote_handle_, "confirm_no", true);
+    RefreshAll();
+}
+
+void EmoteDisplay::HideConfirmScreen()
+{
+    ESP_LOGI(TAG, "HideConfirmScreen");
+    if (!emote_handle_ || !confirm_objects_created_) {
+        return;
+    }
+    emote_set_obj_visible(emote_handle_, "confirm_text", false);
+    emote_set_obj_visible(emote_handle_, "confirm_yes", false);
+    emote_set_obj_visible(emote_handle_, "confirm_no", false);
+    emote_set_anim_visible(emote_handle_, true);
     RefreshAll();
 }
 

@@ -39,6 +39,7 @@ public:
     void SendWakeWordDetected(const std::string& wake_word) override;
     void SendGesture(const std::string& gesture) override;
     void SendTelemetry(const DeviceTelemetry& telemetry) override;
+    void SendConfirm(bool ok) override;
     void SendMcpMessage(const std::string& payload) override;
 
 private:
@@ -51,9 +52,6 @@ private:
     uint32_t tts_received_bytes_ = 0;
     bool tts_run_active_ = false;
 
-    // While the server is waiting on a confirmation, gestures answer it
-    // instead of doing their usual job.
-    bool confirm_pending_ = false;
     size_t turn_audio_bytes_ = 0;  // PCM actually sent since the turn started
     bool listen_started_by_hold_ = true;
 

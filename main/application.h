@@ -6,6 +6,7 @@
 #include <freertos/task.h>
 #include <esp_timer.h>
 
+#include <atomic>
 #include <string>
 #include <mutex>
 #include <deque>
@@ -187,7 +188,21 @@ public:
     // most gestures are useful precisely when the device is sitting idle.
     void SendGesture(const std::string& gesture);
 
+    // The confirm screen session. ShowConfirm and DismissConfirm are safe from
+    // any task; the touch task polls IsConfirmActive and answers through
+    // OnConfirmTouchRelease.
+    void ShowConfirm(const std::string& summary, uint32_t timeout_ms);
+    void DismissConfirm();
+    bool IsConfirmActive() const { return confirm_active_.load(); }
+    void OnConfirmTouchRelease(int x, int y);
+
 private:
+    std::atomic<bool> confirm_active_{false};
+    esp_timer_handle_t confirm_expiry_timer_ = nullptr;
+
+    // Claims the live session exactly once: the winner among a button press,
+    // the expiry timer, and a server-side close is the only one that acts.
+    bool TakeConfirmSession();
     void ConfigureWakeWordForListening();
 
     // Activation task (runs in background)

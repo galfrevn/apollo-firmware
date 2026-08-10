@@ -13,7 +13,7 @@ The URL is built as `<base>/agents/apollo/<device_id>?token=<token>` — the age
 | `hold_start` / `hold_end` | Push-to-talk press and release |
 | `wake` | Wake word detected |
 | `gesture` | `tap`, `double_tap`, `swipe_left`, `swipe_right` |
-| `confirm` | A pending confirmation captures the next gesture: tap accepts, anything else declines |
+| `confirm` | A button press on the confirm screen: Sí sends `ok: true`, No sends `ok: false` |
 | `abort` | User interrupts playback |
 
 Utterance audio rides as raw binary frames (PCM, no framing): the server concatenates them and wraps a RIFF header before transcription.
@@ -25,7 +25,8 @@ Utterance audio rides as raw binary frames (PCM, no framing): the server concate
 | `ui_state` | Face emotion (mapped to the emote vocabulary), accent ring color, caption |
 | `tts_start` | Announces byte total and sample rate of the PCM run |
 | `tts_aborted` | Closes a run whose bytes will never arrive |
-| `confirm_request` | Shows an alert and arms the next-gesture capture |
+| `confirm_request` | Full-screen confirm prompt (summary + Sí/No buttons) with a local expiry from `expiresAt` |
+| `confirm_close` | The window ended elsewhere (resolved, expired, lost); dismisses the confirm screen |
 | `error` / `reminder` / `background_result` | Alerts with matching face |
 
 Reply audio arrives as headerless PCM binary frames and bypasses the Opus decoder (`AudioStreamPacket.pcm`).

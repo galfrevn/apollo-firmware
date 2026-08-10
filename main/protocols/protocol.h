@@ -83,6 +83,8 @@ public:
     virtual void SendGesture(const std::string& gesture) { (void)gesture; }
     // Same story as gestures: only Apollo has a telemetry message.
     virtual void SendTelemetry(const DeviceTelemetry& telemetry) { (void)telemetry; }
+    // And only Apollo asks for confirmations.
+    virtual void SendConfirm(bool ok) { (void)ok; }
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;

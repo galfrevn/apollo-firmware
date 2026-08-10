@@ -22,6 +22,8 @@ public:
     virtual void UpdateStatusBar(bool update_all = false) override;
     virtual void SetPowerSaveMode(bool on) override;
     virtual void SetAccentColor(const char* color) override;
+    virtual void ShowConfirmScreen(const char* summary) override;
+    virtual void HideConfirmScreen() override;
     virtual void SetPreviewImage(const void* image);
 
     // Show or hide a named object from the layout, e.g. "clock_label".
@@ -39,7 +41,10 @@ private:
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;
 
+    bool EnsureConfirmObjects();
+
     emote_handle_t emote_handle_ = nullptr;
+    bool confirm_objects_created_ = false;
 
 };
 

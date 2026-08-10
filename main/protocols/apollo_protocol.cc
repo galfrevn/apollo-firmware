@@ -8,6 +8,7 @@
 #include <esp_timer.h>
 #include <cJSON.h>
 #include <cstring>
+#include <ctime>
 #include "assets/lang_config.h"
 #include "assets/sound_variants.h"
 
@@ -50,6 +51,27 @@ const char* MapApolloEmotion(const char* apollo_emotion) {
 }
 
 uint32_t NowMilliseconds() { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+constexpr uint32_t kDefaultConfirmTimeoutMs = 30000;
+constexpr uint32_t kMinConfirmTimeoutMs = 3000;
+constexpr uint32_t kMaxConfirmTimeoutMs = 45000;
+constexpr int64_t kEarliestPlausibleEpochMs = 1609459200000;  // 2021-01-01
+
+// expiresAt is epoch milliseconds, so it only means something once SNTP has
+// set the clock. Before that (or against a skewed server) the remainder is
+// garbage, and the server's default window is the honest fallback.
+uint32_t ConfirmTimeoutFromExpiry(int64_t expires_at_ms) {
+    const int64_t now_epoch_ms = (int64_t)time(nullptr) * 1000;
+    if (expires_at_ms <= 0 || now_epoch_ms < kEarliestPlausibleEpochMs) {
+        return kDefaultConfirmTimeoutMs;
+    }
+    const int64_t remaining_ms = expires_at_ms - now_epoch_ms;
+    if (remaining_ms < (int64_t)kMinConfirmTimeoutMs ||
+        remaining_ms > (int64_t)kMaxConfirmTimeoutMs) {
+        return kDefaultConfirmTimeoutMs;
+    }
+    return (uint32_t)remaining_ms;
+}
 
 // The wire carries logical effect names so the server can re-purpose sounds
 // without a flash; only this table knows which flash asset each name means.
@@ -181,21 +203,13 @@ void ApolloProtocol::SendGesture(const std::string& gesture) {
     }
 
     cJSON* root = cJSON_CreateObject();
-    if (confirm_pending_) {
-        // A pending confirmation owns the next gesture: a tap accepts, anything
-        // else declines. Waiting for the 30 second expiry would be worse.
-        confirm_pending_ = false;
-        cJSON_AddStringToObject(root, "type", "confirm");
-        cJSON_AddBoolToObject(root, "ok", gesture == "tap");
-    } else {
-        cJSON_AddStringToObject(root, "type", "gesture");
-        cJSON_AddStringToObject(root, "gesture", gesture.c_str());
-        if (gesture.rfind("swipe", 0) == 0) {
-            // A swipe cycles the speech mode. The cue plays now, on the
-            // gesture, rather than on the server's ui_state echo: feedback
-            // that waits for a round trip feels broken on a slow link.
-            Application::GetInstance().PlaySound(Lang::SoundVariants::ModeSwitch());
-        }
+    cJSON_AddStringToObject(root, "type", "gesture");
+    cJSON_AddStringToObject(root, "gesture", gesture.c_str());
+    if (gesture.rfind("swipe", 0) == 0) {
+        // A swipe cycles the speech mode. The cue plays now, on the
+        // gesture, rather than on the server's ui_state echo: feedback
+        // that waits for a round trip feels broken on a slow link.
+        Application::GetInstance().PlaySound(Lang::SoundVariants::ModeSwitch());
     }
     cJSON_AddNumberToObject(root, "ts", NowMilliseconds());
 
@@ -205,6 +219,25 @@ void ApolloProtocol::SendGesture(const std::string& gesture) {
     cJSON_Delete(root);
 
     ESP_LOGI(TAG, "Gesture '%s' -> %s", gesture.c_str(), message.c_str());
+    SendText(message);
+}
+
+void ApolloProtocol::SendConfirm(bool ok) {
+    if (websocket_ == nullptr || !websocket_->IsConnected()) {
+        return;
+    }
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "confirm");
+    cJSON_AddBoolToObject(root, "ok", ok);
+    cJSON_AddNumberToObject(root, "ts", NowMilliseconds());
+
+    auto serialized = cJSON_PrintUnformatted(root);
+    std::string message(serialized);
+    cJSON_free(serialized);
+    cJSON_Delete(root);
+
+    ESP_LOGI(TAG, "Confirm -> %s", message.c_str());
     SendText(message);
 }
 
@@ -251,7 +284,6 @@ bool ApolloProtocol::IsAudioChannelOpened() const {
 
 void ApolloProtocol::CloseAudioChannel(bool send_goodbye) {
     (void)send_goodbye;
-    confirm_pending_ = false;
     tts_run_active_ = false;
     tts_expected_bytes_ = 0;
     tts_received_bytes_ = 0;
@@ -300,6 +332,15 @@ void ApolloProtocol::EmitAlert(const char* status, const char* message, const ch
 }
 
 void ApolloProtocol::HandleUiState(const cJSON* root) {
+    // Any state but "confirm" means the turn moved on, so a confirm screen
+    // still up is stale. Not keyed off tts_start: the summary's own TTS
+    // follows the confirm_request immediately and would kill the screen the
+    // moment it appeared, while the turn's closing ui_state carries "confirm".
+    auto state = cJSON_GetObjectItem(root, "state");
+    if (cJSON_IsString(state) && strcmp(state->valuestring, "confirm") != 0) {
+        Application::GetInstance().DismissConfirm();
+    }
+
     auto emotion = cJSON_GetObjectItem(root, "emotion");
     if (cJSON_IsString(emotion)) {
         EmitEmotion(MapApolloEmotion(emotion->valuestring));
@@ -420,10 +461,18 @@ void ApolloProtocol::HandleIncomingJson(const char* data, size_t len) {
         }
     } else if (strcmp(type->valuestring, "confirm_request") == 0) {
         auto summary = cJSON_GetObjectItem(root, "summary");
+        auto expires_at = cJSON_GetObjectItem(root, "expiresAt");
         if (cJSON_IsString(summary)) {
-            confirm_pending_ = true;
-            EmitAlert("Tocá para confirmar", summary->valuestring, "confused");
+            const uint32_t timeout_ms = ConfirmTimeoutFromExpiry(
+                cJSON_IsNumber(expires_at) ? (int64_t)expires_at->valuedouble : 0);
+            // ShowConfirm schedules its own work onto the main task, which is
+            // what makes it callable from this websocket task.
+            Application::GetInstance().ShowConfirm(summary->valuestring, timeout_ms);
         }
+    } else if (strcmp(type->valuestring, "confirm_close") == 0) {
+        // The window ended somewhere else: resolved from the dashboard,
+        // expired server-side, or lost. The screen has nothing left to answer.
+        Application::GetInstance().DismissConfirm();
     } else if (strcmp(type->valuestring, "play_effect") == 0) {
         auto name = cJSON_GetObjectItem(root, "name");
         if (cJSON_IsString(name)) {
@@ -474,7 +523,6 @@ bool ApolloProtocol::OpenAudioChannel() {
     }
 
     error_occurred_ = false;
-    confirm_pending_ = false;
     tts_run_active_ = false;
     tts_expected_bytes_ = 0;
     tts_received_bytes_ = 0;

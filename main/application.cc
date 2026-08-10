@@ -5,6 +5,7 @@
 #include "audio_codec.h"
 #include "board.h"
 #include "display.h"
+#include "display/confirm_geometry.h"
 #include "mcp_server.h"
 #include "settings.h"
 #include "system_info.h"
@@ -710,6 +711,9 @@ void Application::InitializeProtocol() {
 
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        // A confirmation cannot be answered over a closed channel, and the
+        // server-side expiry that would clear the screen can no longer arrive.
+        DismissConfirm();
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
@@ -1078,6 +1082,67 @@ void Application::SendGesture(const std::string& gesture) {
             return;
         }
         protocol_->SendGesture(gesture);
+    });
+}
+
+void Application::ShowConfirm(const std::string& summary, uint32_t timeout_ms) {
+    Schedule([this, summary, timeout_ms]() {
+        NoteUserActivity();
+        if (confirm_expiry_timer_ == nullptr) {
+            const esp_timer_create_args_t timer_args = {
+                .callback = [](void* arg) { static_cast<Application*>(arg)->DismissConfirm(); },
+                .arg = this,
+                .dispatch_method = ESP_TIMER_TASK,
+                .name = "confirm_expiry",
+                .skip_unhandled_events = true,
+            };
+            ESP_ERROR_CHECK(esp_timer_create(&timer_args, &confirm_expiry_timer_));
+        }
+        esp_timer_stop(confirm_expiry_timer_);
+        confirm_active_.store(true);
+        Board::GetInstance().GetDisplay()->ShowConfirmScreen(summary.c_str());
+        ESP_ERROR_CHECK(esp_timer_start_once(confirm_expiry_timer_, (uint64_t)timeout_ms * 1000));
+    });
+}
+
+bool Application::TakeConfirmSession() {
+    if (!confirm_active_.exchange(false)) {
+        return false;
+    }
+    if (confirm_expiry_timer_ != nullptr) {
+        esp_timer_stop(confirm_expiry_timer_);
+    }
+    return true;
+}
+
+void Application::DismissConfirm() {
+    if (!TakeConfirmSession()) {
+        return;
+    }
+    Schedule([]() { Board::GetInstance().GetDisplay()->HideConfirmScreen(); });
+}
+
+void Application::OnConfirmTouchRelease(int x, int y) {
+    const bool is_approved = confirm_geometry::IsInsideApproveZone(x, y);
+    if (!is_approved && !confirm_geometry::IsInsideRejectZone(x, y)) {
+        return;
+    }
+    if (!TakeConfirmSession()) {
+        return;
+    }
+    Schedule([this, is_approved]() {
+        Board::GetInstance().GetDisplay()->HideConfirmScreen();
+        // The summary's own TTS is usually still playing; an answer means the
+        // user heard enough.
+        if (GetDeviceState() == kDeviceStateSpeaking) {
+            AbortSpeaking(kAbortReasonNone);
+            audio_service_.ResetDecoder();
+            SetDeviceState(kDeviceStateIdle);
+        }
+        if (protocol_ != nullptr) {
+            protocol_->SendConfirm(is_approved);
+        }
+        PlaySound(is_approved ? Lang::Sounds::OGG_SUCCESS : Lang::Sounds::OGG_POPUP);
     });
 }
 
