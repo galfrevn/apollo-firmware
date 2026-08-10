@@ -1,0 +1,99 @@
+# Builds the firmware on every push to main and publishes it to the MEDIA R2
+# bucket, where the device's boot-time OTA check picks it up. The version in
+# CMakeLists.txt is the release trigger: when it matches what is already
+# published, the workflow stops before the (slow) build.
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN   R2 write access to the apollo-media bucket
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare account id
+#   APOLLO_SERVER_URL      wss://… worker url baked into the image
+#   APOLLO_DEVICE_TOKEN    shared secret baked into the image
+name: publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the project version
+        id: project
+        run: |
+          version="$(sed -n 's/^set(PROJECT_VER "\(.*\)")$/\1/p' CMakeLists.txt)"
+          # Digits-and-dots only: the device's version parser treats anything
+          # else as 0 and the worker refuses to serve it.
+          if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "PROJECT_VER '$version' is not digits-and-dots" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Read the published version
+        id: published
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          published="$(npx wrangler@4 r2 object get apollo-media/firmware/latest.json \
+            --pipe --remote 2>/dev/null | jq -r '.version' || true)"
+          echo "Published: '${published}' — building: '${{ steps.project.outputs.version }}'"
+          echo "version=$published" >> "$GITHUB_OUTPUT"
+
+      - name: Write the device configuration
+        if: steps.published.outputs.version != steps.project.outputs.version
+        run: |
+          cat > sdkconfig.defaults.local <<EOF
+          CONFIG_APOLLO_URL="${{ secrets.APOLLO_SERVER_URL }}"
+          CONFIG_APOLLO_TOKEN="${{ secrets.APOLLO_DEVICE_TOKEN }}"
+          CONFIG_APOLLO_DEVICE_ID="desk"
+          EOF
+
+      - name: Build
+        if: steps.published.outputs.version != steps.project.outputs.version
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: esp32s3
+          command: python scripts/build.py waveshare/esp32-s3-touch-lcd-1.85c 2>&1 | tee buildpy.log
+
+      - name: Fail on masked build errors
+        if: steps.published.outputs.version != steps.project.outputs.version
+        # build.py prints [ERROR] but exits 0 on failure, so the log is the
+        # real verdict — and the app image must exist and fit the OTA slot.
+        run: |
+          if grep -q '\[ERROR\]' buildpy.log; then
+            echo 'build.py reported errors' >&2
+            exit 1
+          fi
+          test -f build/xiaozhi.bin
+          size="$(stat -c%s build/xiaozhi.bin)"
+          if [ "$size" -gt $((0x3f0000)) ]; then
+            echo "App image ($size bytes) exceeds the 0x3f0000 OTA slot" >&2
+            exit 1
+          fi
+
+      - name: Publish to R2
+        if: steps.published.outputs.version != steps.project.outputs.version
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          VERSION: ${{ steps.project.outputs.version }}
+        # Binary first, manifest last: a check must never resolve a manifest
+        # whose binary is not uploaded yet. The app image, never merged-binary
+        # (that one carries the bootloader and would corrupt an OTA slot).
+        run: |
+          npx wrangler@4 r2 object put "apollo-media/firmware/apollo-${VERSION}.bin" \
+            --file build/xiaozhi.bin --content-type application/octet-stream --remote
+          printf '{"version":"%s","key":"firmware/apollo-%s.bin"}' "$VERSION" "$VERSION" > latest.json
+          npx wrangler@4 r2 object put apollo-media/firmware/latest.json \
+            --file latest.json --content-type application/json --remote
+          echo "Published apollo-${VERSION}.bin — devices update on their next boot"

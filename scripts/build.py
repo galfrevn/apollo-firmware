@@ -497,7 +497,12 @@ def _build_option_definitions(
     definitions: list[dict[str, Any]] = []
 
     for choice_name in ("DISPLAY_OLED_TYPE", "DISPLAY_LCD_TYPE"):
-        choice = _kconfig_choice(choice_name)
+        # The hard fork trimmed the upstream display choices out of
+        # Kconfig.projbuild; a name that no longer exists is not an error.
+        try:
+            choice = _kconfig_choice(choice_name)
+        except ValueError:
+            continue
         if board_config not in choice["board_configs"]:
             continue
         entries = [entry for entry in choice["entries"] if entry["value"] != "LCD_CUSTOM"]
