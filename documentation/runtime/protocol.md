@@ -12,7 +12,9 @@ The URL is built as `<base>/agents/apollo/<device_id>?token=<token>` — the age
 |------|-----------|
 | `hold_start` / `hold_end` | Push-to-talk press and release |
 | `wake` | Wake word detected |
-| `gesture` | `tap`, `double_tap`, `swipe_left`, `swipe_right` |
+| `audio_end` | VAD endpoint of a wake-word turn: ≥300 ms of speech followed by 1.2 s of silence commits the utterance |
+| `listen_cancel` | The listen session ended without a turn: a tap on the open mic, or 8 s with no speech |
+| `gesture` | `double_tap`, `swipe_left`, `swipe_right` (a tap acts locally and is never forwarded) |
 | `confirm` | A button press on the confirm screen: Sí sends `ok: true`, No sends `ok: false` |
 | `abort` | User interrupts playback |
 
@@ -28,6 +30,7 @@ Utterance audio rides as raw binary frames (PCM, no framing): the server concate
 | `confirm_request` | Full-screen confirm prompt (summary + Sí/No buttons) with a local expiry from `expiresAt` |
 | `confirm_close` | The window ended elsewhere (resolved, expired, lost); dismisses the confirm screen |
 | `error` / `reminder` / `background_result` | Alerts with matching face |
+| `turn_end` | `expectsReply` decides what follows the reply: reopen the mic (the model asked something) or return to idle. Missing `turn_end` falls back to reopening |
 
 Reply audio arrives as headerless PCM binary frames and bypasses the Opus decoder (`AudioStreamPacket.pcm`).
 

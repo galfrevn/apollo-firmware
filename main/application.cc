@@ -24,6 +24,7 @@
 #endif
 #include <arpa/inet.h>
 #include <cJSON.h>
+#include <algorithm>
 #include <cstring>
 
 #define TAG "Application"
@@ -106,6 +107,13 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
     };
     callbacks.on_vad_change = [this](bool speaking) {
+        const int64_t now = esp_timer_get_time();
+        vad_in_speech_.store(speaking);
+        if (speaking) {
+            vad_last_onset_us_.store(now);
+        } else {
+            vad_last_offset_us_.store(now);
+        }
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
     };
     callbacks.on_playback_drained = [this]() {
@@ -202,7 +210,7 @@ void Application::Run() {
         MAIN_EVENT_VAD_CHANGE | MAIN_EVENT_CLOCK_TICK | MAIN_EVENT_ERROR |
         MAIN_EVENT_NETWORK_CONNECTED | MAIN_EVENT_NETWORK_DISCONNECTED | MAIN_EVENT_TOGGLE_CHAT |
         MAIN_EVENT_START_LISTENING | MAIN_EVENT_STOP_LISTENING | MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED;
+        MAIN_EVENT_STATE_CHANGED | MAIN_EVENT_PLAYBACK_DRAINED | MAIN_EVENT_LISTEN_WATCHDOG;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -282,6 +290,10 @@ void Application::Run() {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
             }
+        }
+
+        if (bits & MAIN_EVENT_LISTEN_WATCHDOG) {
+            HandleListenWatchdogEvent();
         }
 
         if (bits & MAIN_EVENT_SCHEDULE) {
@@ -1068,9 +1080,9 @@ void Application::SendGesture(const std::string& gesture) {
                     SetDeviceState(kDeviceStateIdle);
                     return;
                 case kDeviceStateListening:
-                    // Holding the screen is what records; a tap during a turn
-                    // means "drop it".
-                    StopListening();
+                    // A tap on an open mic means "forget it": the buffered
+                    // audio is discarded server-side, no turn runs.
+                    CancelListening();
                     return;
                 default:
                     // Mid-connect or mid-activation: a tap has nothing to toggle.
@@ -1155,9 +1167,101 @@ void Application::FinishSpeaking() {
             audio_service_.PlaySound(Lang::SoundVariants::SpeechDone());
         }
         SetDeviceState(kDeviceStateIdle);
-    } else {
+    } else if (reopen_listening_after_speak_) {
         SetDeviceState(kDeviceStateListening);
+    } else {
+        // The server's turn_end said the reply expects no answer, so the
+        // conversation is over instead of looping back to the microphone.
+        SetDeviceState(kDeviceStateIdle);
     }
+}
+
+void Application::OnTurnEnd(bool expects_reply) {
+    Schedule([this, expects_reply]() {
+        reopen_listening_after_speak_ = expects_reply;
+        // The no-answer verdict can land while the mic is already open again
+        // (short replies drain before turn_end arrives); close it too.
+        if (!expects_reply && GetDeviceState() == kDeviceStateListening &&
+            listening_mode_ != kListeningModeManualStop) {
+            CancelListening();
+        }
+    });
+}
+
+void Application::StartListenWatchdog() {
+    if (listening_mode_ != kListeningModeAutoStop) {
+        return;
+    }
+    if (listen_watchdog_timer_ == nullptr) {
+        const esp_timer_create_args_t timer_args = {
+            .callback =
+                [](void* arg) {
+                    auto* app = static_cast<Application*>(arg);
+                    xEventGroupSetBits(app->event_group_, MAIN_EVENT_LISTEN_WATCHDOG);
+                },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "listen_watchdog",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&timer_args, &listen_watchdog_timer_));
+    }
+    listen_started_us_ = esp_timer_get_time();
+    listen_heard_speech_ = false;
+    vad_in_speech_.store(false);
+    vad_last_onset_us_.store(0);
+    vad_last_offset_us_.store(0);
+    esp_timer_stop(listen_watchdog_timer_);
+    ESP_ERROR_CHECK(esp_timer_start_periodic(listen_watchdog_timer_, 250 * 1000));
+}
+
+void Application::HandleListenWatchdogEvent() {
+    if (GetDeviceState() != kDeviceStateListening ||
+        listening_mode_ != kListeningModeAutoStop) {
+        return;
+    }
+    // No AEC runs while listening, so the ListenStart cue registers on the VAD
+    // as speech; activity inside the grace window is the device hearing itself.
+    constexpr int64_t kCueGraceUs = 700 * 1000;
+    constexpr int64_t kMinSpeechUs = 300 * 1000;
+    constexpr int64_t kEndpointSilenceUs = 1200 * 1000;
+    // Counted from mic-open, so after the cue+grace (~0.7 s) the user has
+    // about 2.3 s to start talking before the session gives up.
+    constexpr int64_t kNoSpeechTimeoutUs = 3000 * 1000;
+
+    const int64_t now = esp_timer_get_time();
+    const bool in_speech = vad_in_speech_.load();
+    const int64_t onset = vad_last_onset_us_.load();
+    const int64_t offset = vad_last_offset_us_.load();
+    const int64_t effective_onset = std::max(onset, listen_started_us_ + kCueGraceUs);
+
+    if (onset > 0) {
+        const int64_t speech_end = in_speech ? now : offset;
+        if (speech_end - effective_onset >= kMinSpeechUs) {
+            listen_heard_speech_ = true;
+        }
+    }
+
+    if (listen_heard_speech_) {
+        if (!in_speech && offset > 0 && now - offset >= kEndpointSilenceUs) {
+            ESP_LOGI(TAG, "VAD endpoint reached, committing the turn");
+            StopListening();
+        }
+    } else if (now - listen_started_us_ >= kNoSpeechTimeoutUs) {
+        ESP_LOGI(TAG, "Nothing said, cancelling the listen session");
+        CancelListening();
+    }
+}
+
+void Application::CancelListening() {
+    if (GetDeviceState() != kDeviceStateListening) {
+        return;
+    }
+    if (protocol_) {
+        protocol_->SendListenCancel();
+    }
+    SetDeviceState(kDeviceStateIdle);
+    audio_service_.PlaySound(Lang::SoundVariants::ListenEnd());
 }
 
 void Application::HandleStopListeningEvent() {
@@ -1301,6 +1405,11 @@ void Application::HandleStateChangedEvent() {
     // Any state change invalidates a pending deferred listening start;
     // the Listening case below re-arms it when needed.
     pending_listening_start_ = false;
+    // The watchdog only polices an open auto-mode mic; StartListeningAudio
+    // re-arms it when the mic actually opens.
+    if (listen_watchdog_timer_ != nullptr) {
+        esp_timer_stop(listen_watchdog_timer_);
+    }
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
@@ -1382,6 +1491,11 @@ void Application::StartListeningAudio() {
     // cleared before it sounds.
     play_popup_on_listening_ = false;
     audio_service_.PlaySound(Lang::SoundVariants::ListenStart());
+
+    // Each new listen session starts optimistic; the reply's turn_end says
+    // whether the mic reopens after Apollo speaks.
+    reopen_listening_after_speak_ = true;
+    StartListenWatchdog();
 }
 
 void Application::ConfigureWakeWordForListening() {
