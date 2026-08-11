@@ -281,8 +281,8 @@ void ApolloProtocol::SendPlaybackAck(uint32_t played_milliseconds) {
 
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "playback_ack");
-    cJSON_AddNumberToObject(root, "seq", tts_sequence_);
-    cJSON_AddNumberToObject(root, "playedMs", played_milliseconds);
+    cJSON_AddNumberToObject(root, "sequence", tts_sequence_);
+    cJSON_AddNumberToObject(root, "playedMilliseconds", played_milliseconds);
     cJSON_AddNumberToObject(root, "ts", NowMilliseconds());
 
     auto serialized = cJSON_PrintUnformatted(root);
@@ -414,7 +414,7 @@ void ApolloProtocol::HandleUiState(const cJSON* root) {
 
 void ApolloProtocol::HandleTimer(const cJSON* root) {
     auto ends_at = cJSON_GetObjectItem(root, "endsAt");
-    auto duration = cJSON_GetObjectItem(root, "durationSec");
+    auto duration = cJSON_GetObjectItem(root, "durationSeconds");
     if (cJSON_IsNumber(ends_at) && cJSON_IsNumber(duration)) {
         const int64_t ends_at_ms = (int64_t)ends_at->valuedouble * 1000;
         timer_arc_ends_at_ms_ = ends_at_ms;
@@ -427,7 +427,7 @@ void ApolloProtocol::HandleTimer(const cJSON* root) {
 
 void ApolloProtocol::HandleTtsStart(const cJSON* root) {
     auto bytes = cJSON_GetObjectItem(root, "bytes");
-    auto sequence = cJSON_GetObjectItem(root, "seq");
+    auto sequence = cJSON_GetObjectItem(root, "sequence");
     auto sample_rate = cJSON_GetObjectItem(root, "sampleRate");
     auto format = cJSON_GetObjectItem(root, "format");
 
