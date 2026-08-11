@@ -41,17 +41,25 @@ public:
     void SendGesture(const std::string& gesture) override;
     void SendTelemetry(const DeviceTelemetry& telemetry) override;
     void SendConfirm(bool ok) override;
+    void SendPlaybackAck(uint32_t played_milliseconds) override;
     void SendMcpMessage(const std::string& payload) override;
 
 private:
     std::unique_ptr<WebSocket> websocket_;
 
-    // Byte accounting for the current TTS run: Apollo never sends an explicit
-    // "speech finished" message, so the end of a run is inferred by counting
-    // downlink bytes against the total announced in `tts_start`.
+    // Byte accounting for the current TTS run. A run with an announced total
+    // closes itself by counting downlink bytes; a run without one (streaming
+    // synthesis) stays open until the server's `tts_end`.
     uint32_t tts_expected_bytes_ = 0;
     uint32_t tts_received_bytes_ = 0;
     bool tts_run_active_ = false;
+    // Echoed in playback acks so the server can discard acks from a run it has
+    // already moved past. -1 until the first tts_start names one.
+    int32_t tts_sequence_ = -1;
+
+    // While a timer arc is live it owns the ring, and the focus window that
+    // rides every ui_state must not repaint over it.
+    int64_t timer_arc_ends_at_ms_ = 0;
 
     size_t turn_audio_bytes_ = 0;  // PCM actually sent since the turn started
     bool listen_started_by_hold_ = true;
@@ -62,6 +70,7 @@ private:
     void HandleIncomingJson(const char* data, size_t len);
     void HandleUiState(const cJSON* root);
     void HandleTtsStart(const cJSON* root);
+    void HandleTimer(const cJSON* root);
     void HandleIncomingAudio(const char* data, size_t len);
     void FinishTtsRun();
 
@@ -69,6 +78,8 @@ private:
     void EmitTtsState(const char* state, const char* text);
     void EmitEmotion(const char* emotion);
     void EmitAccentColor(const char* color);
+    void EmitArcProgress(int64_t started_at_ms, int64_t ends_at_ms);
+    void EmitArcClear();
     void EmitAlert(const char* status, const char* message, const char* emotion);
 
     std::string BuildConnectionUrl(const std::string& base_url, const std::string& device_id,

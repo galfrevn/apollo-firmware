@@ -338,6 +338,13 @@ void Application::Run() {
                 NoteUserActivity();
             }
             MaybeSendTelemetry();
+            // Playback acks close the server's pacing loop. Speaking covers the
+            // post-run drain too: FinishSpeaking is deferred until the queue
+            // empties, and effect playback outside a turn must not ack.
+            if (protocol_ != nullptr && protocol_->IsAudioChannelOpened() &&
+                GetDeviceState() == kDeviceStateSpeaking) {
+                protocol_->SendPlaybackAck(audio_service_.played_tts_milliseconds());
+            }
 #endif
 
 #if defined(CONFIG_APOLLO_PROTOCOL) && defined(CONFIG_USE_EMOTE_MESSAGE_STYLE)
@@ -761,6 +768,7 @@ void Application::InitializeProtocol() {
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
                     aborted_ = false;
+                    audio_service_.ResetPlayedTtsMilliseconds();
                     SetDeviceState(kDeviceStateSpeaking);
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
@@ -825,6 +833,17 @@ void Application::InitializeProtocol() {
                 Schedule([display, color_str = std::string(color->valuestring)]() {
                     display->SetAccentColor(color_str.c_str());
                 });
+            }
+        } else if (strcmp(type->valuestring, "arc") == 0) {
+            auto started_at = cJSON_GetObjectItem(root, "startedAtMs");
+            auto ends_at = cJSON_GetObjectItem(root, "endsAtMs");
+            if (cJSON_IsNumber(started_at) && cJSON_IsNumber(ends_at)) {
+                Schedule([display, started_at_ms = (int64_t)started_at->valuedouble,
+                          ends_at_ms = (int64_t)ends_at->valuedouble]() {
+                    display->SetAccentRingProgress(started_at_ms, ends_at_ms);
+                });
+            } else {
+                Schedule([display]() { display->ClearAccentRingProgress(); });
             }
         } else if (strcmp(type->valuestring, "mcp") == 0) {
             auto payload = cJSON_GetObjectItem(root, "payload");

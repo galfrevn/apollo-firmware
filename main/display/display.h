@@ -49,6 +49,13 @@ public:
     // "#RRGGBB" accent for mode indicators (e.g. the edge ring on round
     // displays). Default is a no-op for displays without one.
     virtual void SetAccentColor(const char* color) {}
+    // Countdown window (epoch ms) drawn as a draining arc over the accent
+    // ring. Default is a no-op for displays without one.
+    virtual void SetAccentRingProgress(int64_t started_at_ms, int64_t ends_at_ms) {
+        (void)started_at_ms;
+        (void)ends_at_ms;
+    }
+    virtual void ClearAccentRingProgress() {}
     // Full-screen takeover asking to approve or reject an unsafe action.
     // Default is a no-op for displays that cannot draw touch targets.
     virtual void ShowConfirmScreen(const char* summary) { (void)summary; }

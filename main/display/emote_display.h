@@ -22,6 +22,8 @@ public:
     virtual void UpdateStatusBar(bool update_all = false) override;
     virtual void SetPowerSaveMode(bool on) override;
     virtual void SetAccentColor(const char* color) override;
+    virtual void SetAccentRingProgress(int64_t started_at_ms, int64_t ends_at_ms) override;
+    virtual void ClearAccentRingProgress() override;
     virtual void ShowConfirmScreen(const char* summary) override;
     virtual void HideConfirmScreen() override;
     virtual void SetPreviewImage(const void* image);
@@ -42,8 +44,10 @@ private:
     virtual void Unlock() override;
 
     bool EnsureConfirmObjects();
+    void EnsureArcRefreshTimer();
 
     emote_handle_t emote_handle_ = nullptr;
+    esp_timer_handle_t arc_refresh_timer_ = nullptr;
     bool confirm_objects_created_ = false;
     // While the confirm screen is up, emotion/status/caption updates are
     // dropped: the turn's closing ui_state arrives right after confirm_request

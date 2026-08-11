@@ -335,6 +335,10 @@ void AudioService::AudioOutputTask() {
 
         codec_->OutputData(task->pcm);
 
+        if (task->tts_source_milliseconds > 0) {
+            played_tts_milliseconds_ += task->tts_source_milliseconds;
+        }
+
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();
         debug_statistics_.playback_count++;
@@ -396,6 +400,10 @@ void AudioService::OpusCodecTask() {
                 task->pcm.resize(sample_count);
                 memcpy(task->pcm.data(), packet->payload.data(), sample_count * sizeof(int16_t));
                 decoded = sample_count > 0;
+                if (decoder_sample_rate_ > 0) {
+                    task->tts_source_milliseconds =
+                        (uint32_t)(sample_count * 1000 / decoder_sample_rate_);
+                }
             } else if (opus_decoder_ != nullptr) {
                 task->pcm.resize(decoder_frame_size_);
                 esp_audio_dec_in_raw_t raw = {

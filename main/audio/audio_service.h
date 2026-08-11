@@ -95,6 +95,9 @@ struct AudioTask {
     AudioTaskType type;
     std::vector<int16_t> pcm;
     uint32_t timestamp = 0;
+    // Playback-ack accounting, in source-stream time so it matches what the
+    // server delivered. Local sound effects keep it at zero.
+    uint32_t tts_source_milliseconds = 0;
 };
 
 struct DebugStatistics {
@@ -133,6 +136,8 @@ public:
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
     void PlaySound(const std::string_view& sound);
+    void ResetPlayedTtsMilliseconds() { played_tts_milliseconds_.store(0); }
+    uint32_t played_tts_milliseconds() const { return played_tts_milliseconds_.load(); }
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
@@ -190,6 +195,7 @@ private:
 #endif
     std::atomic<bool> service_stopped_{true};
     std::atomic<bool> audio_input_need_warmup_{false};
+    std::atomic<uint32_t> played_tts_milliseconds_{0};
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;

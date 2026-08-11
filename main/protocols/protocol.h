@@ -83,6 +83,8 @@ public:
     virtual void SendGesture(const std::string& gesture) { (void)gesture; }
     // Same story as gestures: only Apollo has a telemetry message.
     virtual void SendTelemetry(const DeviceTelemetry& telemetry) { (void)telemetry; }
+
+    virtual void SendPlaybackAck(uint32_t played_milliseconds) { (void)played_milliseconds; }
     // And only Apollo asks for confirmations.
     virtual void SendConfirm(bool ok) { (void)ok; }
     // Cancels an open listen session without committing the audio as a turn.

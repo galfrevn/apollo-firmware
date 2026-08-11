@@ -274,6 +274,25 @@ void ApolloProtocol::SendTelemetry(const DeviceTelemetry& telemetry) {
     SendText(message);
 }
 
+void ApolloProtocol::SendPlaybackAck(uint32_t played_milliseconds) {
+    if (websocket_ == nullptr || !websocket_->IsConnected() || tts_sequence_ < 0) {
+        return;
+    }
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "playback_ack");
+    cJSON_AddNumberToObject(root, "seq", tts_sequence_);
+    cJSON_AddNumberToObject(root, "playedMs", played_milliseconds);
+    cJSON_AddNumberToObject(root, "ts", NowMilliseconds());
+
+    auto serialized = cJSON_PrintUnformatted(root);
+    std::string message(serialized);
+    cJSON_free(serialized);
+    cJSON_Delete(root);
+
+    SendText(message);
+}
+
 void ApolloProtocol::SendAbortSpeaking(AbortReason reason) {
     (void)reason;
     // Tell the server to stop streaming, then drop what is already queued here:
@@ -327,6 +346,20 @@ void ApolloProtocol::EmitAccentColor(const char* color) {
     EmitTranslatedJson(root);
 }
 
+void ApolloProtocol::EmitArcProgress(int64_t started_at_ms, int64_t ends_at_ms) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "arc");
+    cJSON_AddNumberToObject(root, "startedAtMs", (double)started_at_ms);
+    cJSON_AddNumberToObject(root, "endsAtMs", (double)ends_at_ms);
+    EmitTranslatedJson(root);
+}
+
+void ApolloProtocol::EmitArcClear() {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "arc");
+    EmitTranslatedJson(root);
+}
+
 void ApolloProtocol::EmitAlert(const char* status, const char* message, const char* emotion) {
     cJSON* root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "alert");
@@ -364,10 +397,37 @@ void ApolloProtocol::HandleUiState(const cJSON* root) {
     if (cJSON_IsString(caption) && strlen(caption->valuestring) > 0) {
         EmitTtsState("sentence_start", caption->valuestring);
     }
+
+    if (timer_arc_ends_at_ms_ > (int64_t)time(nullptr) * 1000) {
+        return;
+    }
+    auto focus_ends_at = cJSON_GetObjectItem(root, "focusEndsAt");
+    auto focus_started_at = cJSON_GetObjectItem(root, "focusStartedAt");
+    if (cJSON_IsNumber(focus_ends_at) && cJSON_IsNumber(focus_started_at)) {
+        EmitArcProgress((int64_t)focus_started_at->valuedouble * 1000,
+                        (int64_t)focus_ends_at->valuedouble * 1000);
+    } else {
+        // No focus window on this push: whatever focus arc is showing is over.
+        EmitArcClear();
+    }
+}
+
+void ApolloProtocol::HandleTimer(const cJSON* root) {
+    auto ends_at = cJSON_GetObjectItem(root, "endsAt");
+    auto duration = cJSON_GetObjectItem(root, "durationSec");
+    if (cJSON_IsNumber(ends_at) && cJSON_IsNumber(duration)) {
+        const int64_t ends_at_ms = (int64_t)ends_at->valuedouble * 1000;
+        timer_arc_ends_at_ms_ = ends_at_ms;
+        EmitArcProgress(ends_at_ms - (int64_t)duration->valuedouble * 1000, ends_at_ms);
+    } else {
+        timer_arc_ends_at_ms_ = 0;
+        EmitArcClear();
+    }
 }
 
 void ApolloProtocol::HandleTtsStart(const cJSON* root) {
     auto bytes = cJSON_GetObjectItem(root, "bytes");
+    auto sequence = cJSON_GetObjectItem(root, "seq");
     auto sample_rate = cJSON_GetObjectItem(root, "sampleRate");
     auto format = cJSON_GetObjectItem(root, "format");
 
@@ -384,10 +444,13 @@ void ApolloProtocol::HandleTtsStart(const cJSON* root) {
     server_frame_duration_ = APOLLO_FRAME_DURATION_MS;
     tts_expected_bytes_ = cJSON_IsNumber(bytes) ? (uint32_t)bytes->valuedouble : 0;
     tts_received_bytes_ = 0;
-    tts_run_active_ = tts_expected_bytes_ > 0;
+    tts_sequence_ = cJSON_IsNumber(sequence) ? sequence->valueint : -1;
+    // No byte total means streaming synthesis: the run stays open until the
+    // server's tts_end. A total of zero is still an empty run.
+    tts_run_active_ = tts_expected_bytes_ > 0 || bytes == nullptr;
 
-    ESP_LOGI(TAG, "TTS run starting: %lu bytes at %d Hz", (unsigned long)tts_expected_bytes_,
-             server_sample_rate_);
+    ESP_LOGI(TAG, "TTS run starting: %lu bytes at %d Hz (seq %ld)",
+             (unsigned long)tts_expected_bytes_, server_sample_rate_, (long)tts_sequence_);
     EmitTtsState("start", nullptr);
 
     if (!tts_run_active_) {
@@ -424,7 +487,7 @@ void ApolloProtocol::HandleIncomingAudio(const char* data, size_t len) {
         return;
     }
     tts_received_bytes_ += len;
-    if (tts_received_bytes_ >= tts_expected_bytes_) {
+    if (tts_expected_bytes_ > 0 && tts_received_bytes_ >= tts_expected_bytes_) {
         FinishTtsRun();
     }
 }
@@ -446,11 +509,15 @@ void ApolloProtocol::HandleIncomingJson(const char* data, size_t len) {
         HandleUiState(root);
     } else if (strcmp(type->valuestring, "tts_start") == 0) {
         HandleTtsStart(root);
+    } else if (strcmp(type->valuestring, "tts_end") == 0) {
+        FinishTtsRun();
     } else if (strcmp(type->valuestring, "tts_aborted") == 0) {
         // The byte total promised by tts_start will never arrive, so close the
         // run explicitly or the device waits for speech that stopped coming.
         ESP_LOGI(TAG, "Server acknowledged abort");
         FinishTtsRun();
+    } else if (strcmp(type->valuestring, "timer") == 0) {
+        HandleTimer(root);
     } else if (strcmp(type->valuestring, "turn_end") == 0) {
         auto expects_reply = cJSON_GetObjectItem(root, "expectsReply");
         Application::GetInstance().OnTurnEnd(cJSON_IsTrue(expects_reply));

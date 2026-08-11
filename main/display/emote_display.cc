@@ -74,6 +74,34 @@ static int s_display_width = 0;
 static int s_display_height = 0;
 constexpr float kAccentRingThickness = 8.0f;
 
+// Countdown window for the draining-arc mode of the ring (epoch ms; an end of
+// 0 means the plain full ring). Written from the protocol task, read on every
+// flush from the emote render task.
+static std::atomic<int64_t> s_arc_started_at_ms{0};
+static std::atomic<int64_t> s_arc_ends_at_ms{0};
+
+static int64_t NowEpochMilliseconds()
+{
+    struct timeval now_time;
+    gettimeofday(&now_time, nullptr);
+    return (int64_t)now_time.tv_sec * 1000 + now_time.tv_usec / 1000;
+}
+
+static float ComputeArcRemainingFraction()
+{
+    const int64_t ends_at_ms = s_arc_ends_at_ms.load(std::memory_order_relaxed);
+    if (ends_at_ms == 0) {
+        return 1.0f;
+    }
+    const int64_t started_at_ms = s_arc_started_at_ms.load(std::memory_order_relaxed);
+    if (ends_at_ms <= started_at_ms) {
+        return 1.0f;
+    }
+    const float fraction = (float)(ends_at_ms - NowEpochMilliseconds()) /
+                           (float)(ends_at_ms - started_at_ms);
+    return std::min(1.0f, std::max(0.0f, fraction));
+}
+
 static void OverlayAccentRing(int x_start, int y_start, int x_end, int y_end, uint16_t* pixels)
 {
     if (s_display_width == 0 || s_display_height == 0) {
@@ -88,6 +116,8 @@ static void OverlayAccentRing(int x_start, int y_start, int x_end, int y_end, ui
     const float outer_r = std::min(s_display_width, s_display_height) / 2.0f;
     const float inner_r = outer_r - kAccentRingThickness;
     const int stride = x_end - x_start;
+    const float remaining_fraction = ComputeArcRemainingFraction();
+    const float arc_end_angle = remaining_fraction * 2.0f * (float)M_PI;
 
     for (int y = y_start; y < y_end; ++y) {
         const float dy = y - cy;
@@ -109,6 +139,17 @@ static void OverlayAccentRing(int x_start, int y_start, int x_end, int y_end, ui
             const int from = std::max(span[0], x_start);
             const int to = std::min(span[1], x_end - 1);
             for (int x = from; x <= to; ++x) {
+                if (remaining_fraction < 1.0f) {
+                    // Angle from 12 o'clock, clockwise: the arc drains the way
+                    // a clock runs. Unpainted pixels keep the engine's frame.
+                    float pixel_angle = atan2f((float)x - cx, cy - (float)y);
+                    if (pixel_angle < 0.0f) {
+                        pixel_angle += 2.0f * (float)M_PI;
+                    }
+                    if (pixel_angle > arc_end_angle) {
+                        continue;
+                    }
+                }
                 row[x - x_start] = color;
             }
         }
@@ -189,6 +230,11 @@ EmoteDisplay::EmoteDisplay(const esp_lcd_panel_handle_t panel, const esp_lcd_pan
 
 EmoteDisplay::~EmoteDisplay()
 {
+    if (arc_refresh_timer_ != nullptr) {
+        esp_timer_stop(arc_refresh_timer_);
+        esp_timer_delete(arc_refresh_timer_);
+        arc_refresh_timer_ = nullptr;
+    }
     if (emote_handle_) {
         emote_deinit(emote_handle_);
         emote_handle_ = nullptr;
@@ -301,6 +347,61 @@ void EmoteDisplay::SetAccentColor(const char* const color)
     // The engine only re-flushes dirty areas and the screen border belongs to
     // none of them, so a color change has to invalidate everything or the ring
     // keeps its old color until the next full redraw.
+    RefreshAll();
+}
+
+void EmoteDisplay::EnsureArcRefreshTimer()
+{
+    if (arc_refresh_timer_ != nullptr) {
+        return;
+    }
+    const esp_timer_create_args_t timer_args = {
+        .callback =
+            [](void* argument) {
+                auto* display = static_cast<EmoteDisplay*>(argument);
+                if (NowEpochMilliseconds() >=
+                    s_arc_ends_at_ms.load(std::memory_order_relaxed)) {
+                    display->ClearAccentRingProgress();
+                } else {
+                    display->RefreshAll();
+                }
+            },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "arc_refresh",
+        .skip_unhandled_events = true,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &arc_refresh_timer_));
+}
+
+void EmoteDisplay::SetAccentRingProgress(int64_t started_at_ms, int64_t ends_at_ms)
+{
+    if (s_arc_started_at_ms.load(std::memory_order_relaxed) == started_at_ms &&
+        s_arc_ends_at_ms.load(std::memory_order_relaxed) == ends_at_ms) {
+        return;
+    }
+    ESP_LOGI(TAG, "SetAccentRingProgress: %lld -> %lld", (long long)started_at_ms,
+             (long long)ends_at_ms);
+    s_arc_started_at_ms.store(started_at_ms, std::memory_order_relaxed);
+    s_arc_ends_at_ms.store(ends_at_ms, std::memory_order_relaxed);
+    EnsureArcRefreshTimer();
+    esp_timer_stop(arc_refresh_timer_);
+    // One-second cadence matches the visible resolution of a minutes-long
+    // countdown; the flush itself recomputes the fraction on every frame.
+    ESP_ERROR_CHECK(esp_timer_start_periodic(arc_refresh_timer_, 1000000));
+    RefreshAll();
+}
+
+void EmoteDisplay::ClearAccentRingProgress()
+{
+    if (s_arc_ends_at_ms.exchange(0, std::memory_order_relaxed) == 0) {
+        return;
+    }
+    ESP_LOGI(TAG, "ClearAccentRingProgress");
+    s_arc_started_at_ms.store(0, std::memory_order_relaxed);
+    if (arc_refresh_timer_ != nullptr) {
+        esp_timer_stop(arc_refresh_timer_);
+    }
     RefreshAll();
 }
 
