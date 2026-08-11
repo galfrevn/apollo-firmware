@@ -19,6 +19,7 @@
 #include "wake_words/wake_word_audio_cache.h"
 
 class CustomWakeWord;
+class MicroWakeWord;
 
 class AfeAudioEngine : public AudioEngine {
 public:
@@ -51,6 +52,7 @@ private:
         kNone,
         kWakeNet,
         kMultiNet,
+        kMicroWakeWord,
     };
 
     static constexpr EventBits_t kWakeWordEnabled = 1 << 0;
@@ -79,6 +81,9 @@ private:
     WakeDetector wake_detector_ = WakeDetector::kNone;
 
     std::unique_ptr<CustomWakeWord> custom_wake_word_;
+#if CONFIG_USE_MICRO_WAKE_WORD
+    std::unique_ptr<MicroWakeWord> micro_wake_word_;
+#endif
     std::vector<std::string> wake_words_;
     std::string last_detected_wake_word_;
     std::vector<int16_t> input_buffer_;

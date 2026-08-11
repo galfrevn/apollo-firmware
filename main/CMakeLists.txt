@@ -139,6 +139,9 @@ if(CONFIG_IDF_TARGET_ESP32S3 OR CONFIG_IDF_TARGET_ESP32P4 OR CONFIG_IDF_TARGET_E
     list(APPEND SOURCES "audio/engines/afe_audio_engine.cc")
     list(APPEND SOURCES "audio/wake_words/custom_wake_word.cc")
     list(APPEND SOURCES "audio/wake_words/wake_word_audio_cache.cc")
+    if(CONFIG_USE_MICRO_WAKE_WORD)
+        list(APPEND SOURCES "audio/wake_words/micro_wake_word.cc")
+    endif()
 else()
     list(APPEND SOURCES "audio/engines/lite_audio_engine.cc")
     list(APPEND SOURCES "audio/wake_words/esp_wake_word.cc")
@@ -237,8 +240,16 @@ if(CONFIG_BOARD_TYPE_ESP32_P4_FUNCTION_EV_BOARD)
         sdmmc
     )
 endif()
+set(WAKE_WORD_MODEL_EMBED "")
+if(CONFIG_USE_MICRO_WAKE_WORD)
+    set(MICRO_WAKE_WORD_MODEL "hey_apolo.tflite" CACHE STRING "Model filename under main/assets/wakewords")
+    # Copied to a fixed name so the embed symbol stays stable across model swaps
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/assets/wakewords/${MICRO_WAKE_WORD_MODEL}
+                   ${CMAKE_CURRENT_BINARY_DIR}/micro_wake_word_model.tflite COPYONLY)
+    set(WAKE_WORD_MODEL_EMBED ${CMAKE_CURRENT_BINARY_DIR}/micro_wake_word_model.tflite)
+endif()
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${WAKE_WORD_MODEL_EMBED}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     PRIV_REQUIRES

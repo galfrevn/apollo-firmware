@@ -5,7 +5,8 @@ Everything audio goes through `main/audio/audio_service.*`: capture, wake word, 
 ## Uplink (mic → server)
 
 - Capture at 16 kHz mono. While a hold or wake session is open, frames ship to the server as raw PCM binary websocket frames.
-- **Wake word runs on the raw mic channel** inside `AfeAudioEngine::Feed()`. On this board the AFE-integrated WakeNet never detects — verified across a long bisection — so WakeNet gets the microphone directly. Consequence: the raw path bypasses AEC, so barge-in over the device's own speech is untested.
+- **Wake word runs on the AFE output.** With `CONFIG_USE_MICRO_WAKE_WORD` (the shipping config) a microWakeWord streaming TFLite model ("Hey, Apólo", embedded in the app image from `main/assets/wakewords/`) consumes post-AEC mono frames in `AfeAudioEngine::HandleWakeWordResult()` via `MicroWakeWord`, exactly like the MultiNet path. Because the detector sees echo-cancelled audio, barge-in during playback works. An earlier note here claimed the AFE-integrated WakeNet never detects on this board; that was a misdiagnosis — the flashed image carried a different model than sdkconfig selected.
+- Tuning lives in menuconfig: `MICRO_WAKE_WORD_PROBABILITY_CUTOFF` (percent, higher = stricter) and `MICRO_WAKE_WORD_SLIDING_WINDOW_SIZE`. Swap the model file with `idf.py -DMICRO_WAKE_WORD_MODEL=<name>.tflite reconfigure`.
 
 ## Downlink (server → speaker)
 
