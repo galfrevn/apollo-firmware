@@ -449,15 +449,21 @@ void Application::HandleActivationDoneEvent() {
     SystemInfo::PrintHeapStats();
     SetDeviceState(kDeviceStateIdle);
 
+    std::string version = esp_app_get_description()->version;
+#ifdef CONFIG_APOLLO_PROTOCOL
+    // ota_ is still in use by the activation task's deferred firmware check;
+    // it also owns releasing it. Server time comes from SNTP under Apollo.
+#else
     has_server_time_ = ota_->HasServerTime();
+    version = ota_->GetCurrentVersion();
+    ota_.reset();
+#endif
 
     auto display = Board::GetInstance().GetDisplay();
-    std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
+    std::string message = std::string(Lang::Strings::VERSION) + version;
     display->ShowNotification(message.c_str());
     display->SetChatMessage("system", "");
 
-    // Release OTA object after activation is complete
-    ota_.reset();
     auto& board = Board::GetInstance();
     board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
 
@@ -488,7 +494,6 @@ void Application::ActivationTask() {
     // never happen.
     ESP_LOGI(TAG, "Apollo protocol selected, skipping OTA activation");
     InitializeSystemTime();
-    CheckApolloFirmwareUpdate();
 #endif
 
     // Initialize the protocol
@@ -496,6 +501,14 @@ void Application::ActivationTask() {
 
     // Signal completion to main loop
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
+
+#ifdef CONFIG_APOLLO_PROTOCOL
+    // After the ready signal on purpose: the check is a full HTTPS round trip
+    // (~2.5 s) and the device is perfectly usable while it runs. ota_ is
+    // released here, not in the handler, so the check can't race its owner.
+    CheckApolloFirmwareUpdate();
+    ota_.reset();
+#endif
 }
 
 #ifdef CONFIG_APOLLO_PROTOCOL
