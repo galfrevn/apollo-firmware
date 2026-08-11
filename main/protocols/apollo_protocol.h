@@ -35,6 +35,7 @@ public:
 
     void SendStartListening(ListeningMode mode) override;
     void SendStopListening() override;
+    void SendListenCancel() override;
     void SendAbortSpeaking(AbortReason reason) override;
     void SendWakeWordDetected(const std::string& wake_word) override;
     void SendGesture(const std::string& gesture) override;

@@ -7,7 +7,7 @@ The round screen is the only input surface. The board's touch task (`main/boards
 | Gesture | Effect |
 |---------|--------|
 | Hold (≥450 ms, finger still) | Push-to-talk: records until the finger lifts |
-| Tap | Sent to the server |
+| Tap | Local stop: cancels an open mic (listening → `listen_cancel`, nothing transcribed) or cuts Apollo off mid-speech (speaking → `abort`); never forwarded as a gesture |
 | Double tap | Sent to the server (mute used to live here; removed as a trap) |
 | Swipe left/right | Cycle speech mode; the switch sound cues locally, the ring color follows from the server echo |
 

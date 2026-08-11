@@ -34,6 +34,7 @@
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
 #define MAIN_EVENT_PLAYBACK_DRAINED     (1 << 13)
+#define MAIN_EVENT_LISTEN_WATCHDOG      (1 << 14)
 
 
 enum AecMode {
@@ -114,6 +115,8 @@ public:
     void RegisterMcpBroadcastCallback(std::function<void(const std::string&)> callback);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
+    // Whether the just-finished reply expects an answer; safe from any task.
+    void OnTurnEnd(bool expects_reply);
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
     
@@ -148,6 +151,13 @@ private:
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     bool pending_listening_start_ = false;  // Waiting for playback to drain before starting listening (auto mode)
     bool pending_speech_stop_ = false;  // Reply fully received, still playing out
+    bool reopen_listening_after_speak_ = true;  // Cleared by turn_end when the reply expects no answer
+    bool listen_heard_speech_ = false;
+    int64_t listen_started_us_ = 0;
+    esp_timer_handle_t listen_watchdog_timer_ = nullptr;
+    std::atomic<bool> vad_in_speech_{false};
+    std::atomic<int64_t> vad_last_onset_us_{0};
+    std::atomic<int64_t> vad_last_offset_us_{0};
     int idle_seconds_ = 0;              // Seconds since the last sign of life
     bool is_screen_asleep_ = false;
     int last_channel_attempt_ticks_ = -1000;  // Rate-limits idle channel reopening
@@ -167,6 +177,9 @@ private:
     void HandleNetworkDisconnectedEvent();
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
+    void HandleListenWatchdogEvent();
+    void StartListenWatchdog();
+    void CancelListening();
     void MaybeSendTelemetry();
     void ContinueOpenAudioChannel(ListeningMode mode);
     void BeginWakeWordInvoke(const std::string& wake_word);

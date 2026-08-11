@@ -191,6 +191,11 @@ void ApolloProtocol::SendStopListening() {
     SendEvent(listen_started_by_hold_ ? "hold_end" : "audio_end");
 }
 
+void ApolloProtocol::SendListenCancel() {
+    ESP_LOGI(TAG, "Listen cancelled, %u bytes discarded", (unsigned)turn_audio_bytes_);
+    SendEvent("listen_cancel");
+}
+
 void ApolloProtocol::SendWakeWordDetected(const std::string& wake_word) {
     // Apollo has no voice-print step, so the wake word itself carries no extra
     // information beyond "start listening", which SendStartListening covers.
@@ -446,6 +451,9 @@ void ApolloProtocol::HandleIncomingJson(const char* data, size_t len) {
         // run explicitly or the device waits for speech that stopped coming.
         ESP_LOGI(TAG, "Server acknowledged abort");
         FinishTtsRun();
+    } else if (strcmp(type->valuestring, "turn_end") == 0) {
+        auto expects_reply = cJSON_GetObjectItem(root, "expectsReply");
+        Application::GetInstance().OnTurnEnd(cJSON_IsTrue(expects_reply));
     } else if (strcmp(type->valuestring, "error") == 0) {
         auto message = cJSON_GetObjectItem(root, "message");
         EmitAlert("Error", cJSON_IsString(message) ? message->valuestring : "Error", "sad");
