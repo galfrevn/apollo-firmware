@@ -10,13 +10,17 @@
 // (300,296) sits at ~167 from center.
 namespace confirm_geometry {
 
+// Three wrapped lines of the 20 px font; anything longer clips.
 constexpr int kSummaryOffsetY = 78;
-constexpr int kSummaryWidth = 240;
-constexpr int kSummaryHeight = 110;
+constexpr int kSummaryWidth = 250;
+constexpr int kSummaryHeight = 90;
 
-constexpr int kButtonOffsetY = 232;
+// gfx_label has no vertical centering — text draws at the top of its box —
+// so the visible button is only slightly taller than the text line and sits
+// centered in the (much larger) touch zone.
+constexpr int kButtonOffsetY = 246;
 constexpr int kButtonWidth = 110;
-constexpr int kButtonHeight = 64;
+constexpr int kButtonHeight = 40;
 constexpr int kRejectButtonOffsetX = 60;
 constexpr int kApproveButtonOffsetX = 190;
 

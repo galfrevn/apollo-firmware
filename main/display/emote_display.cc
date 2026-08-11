@@ -329,6 +329,9 @@ bool EmoteDisplay::EnsureConfirmObjects()
     gfx_obj_set_size(summary_label, confirm_geometry::kSummaryWidth,
                      confirm_geometry::kSummaryHeight);
     gfx_label_set_color(summary_label, GFX_COLOR_HEX(confirm_geometry::kSummaryTextColor));
+    // The configurator default is SCROLL; a prompt the user must judge has to
+    // hold still.
+    gfx_label_set_long_mode(summary_label, GFX_LABEL_LONG_WRAP);
 
     gfx_obj_align(approve_button, GFX_ALIGN_TOP_LEFT, confirm_geometry::kApproveButtonOffsetX,
                   confirm_geometry::kButtonOffsetY);
