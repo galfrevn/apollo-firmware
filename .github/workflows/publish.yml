@@ -90,10 +90,20 @@ jobs:
         # Binary first, manifest last: a check must never resolve a manifest
         # whose binary is not uploaded yet. The app image, never merged-binary
         # (that one carries the bootloader and would corrupt an OTA slot).
+        #
+        # changelog/<version>.md, when present, rides along in the manifest:
+        # one short Spanish sentence that Apollo speaks after self-updating
+        # (the worker's push-OTA reads it). Kept optional so releases without
+        # one still publish; capped because the sentence is spoken aloud.
         run: |
           npx wrangler@4 r2 object put "apollo-media/firmware/apollo-${VERSION}.bin" \
             --file build/xiaozhi.bin --content-type application/octet-stream --remote
-          printf '{"version":"%s","key":"firmware/apollo-%s.bin"}' "$VERSION" "$VERSION" > latest.json
+          changelog=""
+          if [ -f "changelog/${VERSION}.md" ]; then
+            changelog="$(head -c 400 "changelog/${VERSION}.md" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+          fi
+          jq -cn --arg version "$VERSION" --arg key "firmware/apollo-${VERSION}.bin" --arg changelog "$changelog" \
+            '{version: $version, key: $key} + (if $changelog == "" then {} else {changelog: $changelog} end)' > latest.json
           npx wrangler@4 r2 object put apollo-media/firmware/latest.json \
             --file latest.json --content-type application/json --remote
           echo "Published apollo-${VERSION}.bin — devices update on their next boot"
