@@ -93,6 +93,13 @@ if(CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_85C)
     set(EMOTE_EXTERNAL_PATH "${APOLLO_ASSETS_STAGING}")
 endif()
 
+# No fonts, no emoji collection and no emote resolution: this board has no
+# display driver yet, so every asset those settings pull in would be dead
+# weight in an 8MB flash that already has to fit two OTA slots.
+if(CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_EPAPER_1_54)
+    set(BOARD_DIR "waveshare/esp32-s3-epaper-1.54")
+endif()
+
 
 if(NOT BOARD_DIR AND NOT CMAKE_BUILD_EARLY_EXPANSION)
     message(FATAL_ERROR "The selected board does not define BOARD_DIR")

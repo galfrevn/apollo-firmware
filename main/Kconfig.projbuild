@@ -114,11 +114,21 @@ choice BOARD_TYPE
     prompt "Target Board"
     default BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_85C
     help
-        Apollo runs on exactly one board in this fork.
+        Two bodies: the 1.85C desk agent Apollo was written for, and a
+        pocket-sized e-paper board that runs on a battery.
 
     config BOARD_TYPE_WAVESHARE_ESP32_S3_TOUCH_LCD_1_85C
         bool "Waveshare ESP32-S3-Touch-LCD-1.85C"
         depends on IDF_TARGET_ESP32S3
+
+    config BOARD_TYPE_WAVESHARE_ESP32_S3_EPAPER_1_54
+        bool "Waveshare ESP32-S3-ePaper-1.54 (V2, 8MB flash)"
+        depends on IDF_TARGET_ESP32S3
+        help
+            200x200 monochrome e-paper, no touch, battery powered, three
+            switched power rails. The display is not driven yet: the board
+            falls back to NoDisplay while the audio and protocol halves are
+            brought up.
 endchoice
 
 choice DISPLAY_ESP32S3_TOUCH_LCD_1_85C

@@ -1,0 +1,16 @@
+{
+    "manufacturer": "waveshare",
+    "type": "esp32-s3-epaper-1.54",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "esp32-s3-epaper-1.54",
+            "sdkconfig_append": [
+                "CONFIG_BOARD_TYPE_WAVESHARE_ESP32_S3_EPAPER_1_54=y",
+                "CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/8m.csv\"",
+                "CONFIG_WAKE_WORD_DISABLED=y"
+            ]
+        }
+    ]
+}
